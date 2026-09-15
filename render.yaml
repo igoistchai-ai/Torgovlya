@@ -18,9 +18,13 @@ services:
         value: okx
       - key: MARKET_TYPE
         value: spot
+      - key: WEBAPP_URL
+        value: https://torgovlya-1.onrender.com/app
       - key: CANDLE_LIMIT
         value: '500'
       - key: CACHE_SECONDS
         value: '15'
       - key: MAX_IMAGE_MB
         value: '10'
+      - key: NEWS_URL
+        sync: false
