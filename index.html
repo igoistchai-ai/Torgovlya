@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050505">
+  <title>NEZZX GRAFIK</title>
+  <link rel="stylesheet" href="/app/app.css">
+  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">AI MARKET ANALYST</div>
+        <h1>NEZZX GRAFIK</h1>
+      </div>
+      <div class="status-dot" id="statusDot" title="Соединение"></div>
+    </header>
+
+    <section class="controls glass">
+      <label>
+        <span>Актив</span>
+        <select id="symbol">
+          <option value="BTC/USDT">BTC/USDT</option>
+          <option value="ETH/USDT">ETH/USDT</option>
+          <option value="LTC/USDT">LTC/USDT</option>
+          <option value="SOL/USDT">SOL/USDT</option>
+          <option value="BNB/USDT">BNB/USDT</option>
+          <option value="XRP/USDT">XRP/USDT</option>
+          <option value="DOGE/USDT">DOGE/USDT</option>
+          <option value="ADA/USDT">ADA/USDT</option>
+        </select>
+      </label>
+      <div class="timeframes" id="timeframes">
+        <button data-tf="1m">1м</button>
+        <button data-tf="5m">5м</button>
+        <button data-tf="15m" class="active">15м</button>
+        <button data-tf="1h">1ч</button>
+        <button data-tf="4h">4ч</button>
+        <button data-tf="1d">1д</button>
+        <button data-tf="1w">1н</button>
+      </div>
+    </section>
+
+    <section class="chart-card glass">
+      <div class="chart-head">
+        <div>
+          <div class="chart-title" id="chartTitle">BTC/USDT</div>
+          <div class="chart-subtitle" id="chartSubtitle">15м · OKX</div>
+        </div>
+        <div class="price-block">
+          <strong id="livePrice">—</strong>
+          <span id="dataTime">—</span>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div class="chart-loading" id="chartLoading">Ожидание данных…</div>
+      </div>
+      <div class="legend">
+        <span><i class="bull"></i>Рост</span>
+        <span><i class="bear"></i>Падение</span>
+        <span>EMA 20</span>
+        <span>EMA 50</span>
+      </div>
+    </section>
+
+    <section class="action-row">
+      <button class="primary" id="analyzeBtn">Начать анализ</button>
+      <button class="secondary" id="refreshBtn">Обновить</button>
+    </section>
+
+    <section class="signal glass" id="signalCard">
+      <div class="signal-top">
+        <span class="label">СИГНАЛ ИИ</span>
+        <span class="confidence" id="confidence">—</span>
+      </div>
+      <div class="signal-main" id="signalMain">ОЖИДАНИЕ</div>
+      <div class="signal-reason" id="signalReason">Нажми «Начать анализ», чтобы получить проверенный анализ.</div>
+      <div class="levels" id="levels"></div>
+    </section>
+
+    <section class="stats-grid">
+      <div class="stat glass"><span>Состояние</span><strong id="marketState">—</strong></div>
+      <div class="stat glass"><span>Структура</span><strong id="structure">—</strong></div>
+      <div class="stat glass"><span>Объём</span><strong id="volume">—</strong></div>
+      <div class="stat glass"><span>Ликвидность</span><strong id="liquidity">—</strong></div>
+    </section>
+
+    <section class="chat glass">
+      <div class="chat-head">
+        <div>
+          <div class="label">NEZZX AI</div>
+          <div class="chat-title">Мини-чат анализа</div>
+        </div>
+        <span class="online">ONLINE</span>
+      </div>
+      <div class="messages" id="messages">
+        <div class="bubble ai">Я готов. Выбери актив и таймфрейм, затем запусти анализ.</div>
+      </div>
+      <div class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="Спроси про текущий анализ…" autocomplete="off">
+        <button id="chatSend">Отправить</button>
+      </div>
+    </section>
+
+    <footer>Данные рынка: OKX · Анализ носит информационный характер.</footer>
+  </main>
+  <script src="/app/app.js"></script>
+</body>
+</html>
