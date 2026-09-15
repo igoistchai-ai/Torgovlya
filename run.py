@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 from bot import APP_URL, SITE_URL, bot, dp, run_analysis
-from market import candles
+from market import candles, ticker
 
 BASE_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = BASE_DIR / "webapp"
@@ -172,6 +172,51 @@ async def api_analyze(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)[:1000]}, status=500)
 
 
+async def api_ticker(request: web.Request) -> web.Response:
+    if not api_authorized(request):
+        return web.json_response({"error": "Telegram authorization required"}, status=401)
+
+    symbol = request.query.get("symbol", "BTC/USDT")
+    if symbol not in ALLOWED_SYMBOLS:
+        return web.json_response({"error": "Unsupported symbol"}, status=400)
+
+    try:
+        data = await asyncio.to_thread(ticker, symbol)
+        return web.json_response({"symbol": symbol, "source": "OKX", **data})
+    except Exception as exc:
+        print(f"Ticker API error: {type(exc).__name__}: {exc}", flush=True)
+        return web.json_response({"error": str(exc)[:700]}, status=500)
+
+
+async def api_chat(request: web.Request) -> web.Response:
+    if not api_authorized(request):
+        return web.json_response({"error": "Telegram authorization required"}, status=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return web.json_response({"error": "Message is empty"}, status=400)
+    if len(message) > 8000:
+        return web.json_response({"error": "Message is too long"}, status=400)
+
+    try:
+        from ai import chat
+        context = {
+            "symbol": body.get("symbol", "BTC/USDT"),
+            "timeframe": body.get("timeframe", "15m"),
+            "analysis": body.get("analysis") or {},
+        }
+        answer = await asyncio.to_thread(chat, message, context)
+        return web.json_response({"answer": answer}, dumps=lambda obj: json.dumps(obj, ensure_ascii=False, default=json_default))
+    except Exception as exc:
+        print(f"Chat API error: {type(exc).__name__}: {exc}", flush=True)
+        return web.json_response({"error": str(exc)[:1000]}, status=500)
+
+
 async def on_startup(app: web.Application):
     base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
     if not base_url:
@@ -221,7 +266,9 @@ app.router.add_get("/app/style.css", app_css)
 app.router.add_get("/app/app.css", app_css)
 app.router.add_get("/app/app.js", app_js)
 app.router.add_get("/api/candles", api_candles)
+app.router.add_get("/api/ticker", api_ticker)
 app.router.add_post("/api/analyze", api_analyze)
+app.router.add_post("/api/chat", api_chat)
 app.on_startup.append(on_startup)
 app.on_cleanup.append(on_cleanup)
 
