@@ -24,5 +24,3 @@ services:
         value: '15'
       - key: MAX_IMAGE_MB
         value: '10'
-      - key: NEWS_URL
-        sync: false
