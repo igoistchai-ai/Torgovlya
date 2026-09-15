@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: crypto-vision-analyst
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6
+      - key: EXCHANGE_ID
+        value: okx
+      - key: MARKET_TYPE
+        value: spot
+      - key: CANDLE_LIMIT
+        value: '500'
+      - key: CACHE_SECONDS
+        value: '15'
+      - key: MAX_IMAGE_MB
+        value: '10'
+      - key: NEWS_URL
+        sync: false
