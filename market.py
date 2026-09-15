@@ -1,201 +1,176 @@
 import time
 from typing import Any
 
-import httpx
+import ccxt
 import pandas as pd
 
 from config import settings
 
-# Primary public market-data source: OKX.
-# Public market endpoints do not require API keys.
-OKX_BASE_URL = "https://www.okx.com"
-OKX_CANDLES_URL = f"{OKX_BASE_URL}/api/v5/market/candles"
-OKX_TICKER_URL = f"{OKX_BASE_URL}/api/v5/market/ticker"
+# OKX is used as the public market-data source.
+# No OKX API key is required for public market data.
+_exchange = ccxt.okx({
+    "enableRateLimit": True,
+    "options": {
+        "defaultType": "spot",
+    },
+})
 
-# OKX uses uppercase timeframe names for some intervals.
-_TIMEFRAME_MAP = {
-    "1m": "1m",
-    "3m": "3m",
-    "5m": "5m",
-    "15m": "15m",
-    "30m": "30m",
-    "1h": "1H",
-    "2h": "2H",
-    "4h": "4H",
-    "6h": "6H",
-    "12h": "12H",
-    "1d": "1D",
-    "2d": "2D",
-    "3d": "3D",
-    "1w": "1W",
-}
-
-# Keep the process small and predictable. httpx is already a project dependency.
-_client = httpx.Client(
-    timeout=httpx.Timeout(15.0, connect=8.0),
-    headers={"User-Agent": "CryptoVisionAnalyst/1.0"},
-)
-_cache: dict[tuple[Any, ...], tuple[float, Any]] = {}
+_market_cache = None
+_market_cache_at = 0.0
 
 
-def _cached(key):
-    item = _cache.get(key)
-    if item and time.time() - item[0] < settings.cache_seconds:
-        return item[1]
-    return None
+def _load_markets():
+    global _market_cache, _market_cache_at
 
+    now = time.time()
+    if _market_cache is not None and now - _market_cache_at < 3600:
+        return _market_cache
 
-def _okx_symbol(symbol: str) -> str:
-    value = symbol.strip().upper().replace("_", "/")
-    if ":" in value:
-        value = value.split(":", 1)[0]
-    if "/" in value:
-        base, quote = value.split("/", 1)
-        return f"{base}-{quote}"
-    if value.endswith("USDT") and len(value) > 4:
-        return f"{value[:-4]}-USDT"
-    if value.endswith("USDC") and len(value) > 4:
-        return f"{value[:-4]}-USDC"
-    raise ValueError("Неверный формат торговой пары")
-
-
-def _display_symbol(symbol: str) -> str:
-    return _okx_symbol(symbol).replace("-", "/")
-
-
-def _timeframe(timeframe: str) -> str:
-    key = timeframe.strip().lower()
-    if key not in _TIMEFRAME_MAP:
-        raise ValueError(f"Неподдерживаемый таймфрейм: {timeframe}")
-    return _TIMEFRAME_MAP[key]
-
-
-def _request(url: str, params: dict[str, Any]) -> dict[str, Any]:
     try:
-        response = _client.get(url, params=params)
-        response.raise_for_status()
-        payload = response.json()
-    except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Не удалось получить рыночные данные: OKX HTTP {exc.response.status_code}"
-        ) from exc
-    except (httpx.HTTPError, ValueError) as exc:
-        raise RuntimeError("Не удалось подключиться к OKX для получения рыночных данных") from exc
-
-    if not isinstance(payload, dict) or payload.get("code") != "0":
-        message = payload.get("msg") if isinstance(payload, dict) else None
-        # Do not forward huge/raw exchange responses to Telegram.
-        raise RuntimeError(f"OKX не вернул рыночные данные{f': {message}' if message else ''}")
-    return payload
+        _market_cache = _exchange.load_markets()
+        _market_cache_at = now
+        return _market_cache
+    except Exception as exc:
+        raise RuntimeError(f"Не удалось загрузить список рынков OKX: {exc}") from exc
 
 
-def _validate_ohlc(df: pd.DataFrame) -> None:
-    if df.empty:
-        raise ValueError("Рыночные данные пусты")
+def _normalize_symbol(symbol: str) -> str:
+    symbol = symbol.strip().upper().replace("-", "/").replace("_", "/")
 
-    if not df["timestamp"].is_monotonic_increasing:
-        raise ValueError("Нарушен порядок свечей")
+    if "/" not in symbol and symbol.endswith("USDT"):
+        symbol = symbol[:-4] + "/USDT"
 
-    bad = (
-        (df["high"] < df[["open", "close"]].max(axis=1))
-        | (df["low"] > df[["open", "close"]].min(axis=1))
-        | (df[["open", "high", "low", "close", "volume"]] < 0).any(axis=1)
-    )
-    if bad.any():
-        raise ValueError("OKX вернул некорректные OHLCV данные")
-
-    if df["timestamp"].duplicated().any():
-        raise ValueError("Обнаружены дублирующиеся свечи")
+    return symbol
 
 
-def candles(symbol: str, timeframe: str, limit: int | None = None):
-    requested_limit = limit or settings.candle_limit
-    # OKX public candles endpoint allows up to 1440 recent entries.
-    requested_limit = max(10, min(int(requested_limit), 1440))
+def _validate_symbol(symbol: str) -> str:
+    symbol = _normalize_symbol(symbol)
+    markets = _load_markets()
 
-    inst_id = _okx_symbol(symbol)
-    bar = _timeframe(timeframe)
-    key = ("okx", inst_id, bar, requested_limit)
-    hit = _cached(key)
-    if hit is not None:
-        return hit
+    if symbol not in markets:
+        raise ValueError(f"Пара {symbol} недоступна на OKX")
 
-    payload = _request(
-        OKX_CANDLES_URL,
-        {"instId": inst_id, "bar": bar, "limit": str(requested_limit)},
-    )
+    market = markets[symbol]
+    if not market.get("spot", False):
+        raise ValueError(f"Пара {symbol} не является спотовой парой OKX")
 
-    rows = payload.get("data") or []
-    if not rows:
-        raise ValueError("OKX не вернул свечи для выбранной пары")
+    return symbol
 
-    # OKX candle row:
-    # [timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm]
-    parsed = []
-    for row in rows:
-        if len(row) < 6:
-            continue
-        parsed.append(
-            [
-                int(row[0]),
-                float(row[1]),
-                float(row[2]),
-                float(row[3]),
-                float(row[4]),
-                float(row[5]),
-            ]
+
+def candles(symbol: str, timeframe: str, limit: int | None = None) -> pd.DataFrame:
+    """Fetch and validate OHLCV candles from OKX through CCXT."""
+
+    symbol = _validate_symbol(symbol)
+    limit = int(limit or getattr(settings, "candle_limit", 500))
+
+    if limit < 50:
+        limit = 50
+    if limit > 1000:
+        limit = 1000
+
+    try:
+        rows = _exchange.fetch_ohlcv(
+            symbol,
+            timeframe=timeframe,
+            limit=limit,
         )
+    except Exception as exc:
+        raise RuntimeError(
+            f"OKX не вернул свечи для {symbol} ({timeframe})."
+        ) from exc
 
-    if not parsed:
-        raise ValueError("OKX вернул свечи в неожиданном формате")
+    if not rows:
+        raise RuntimeError(f"OKX вернул пустые данные для {symbol} ({timeframe}).")
 
     df = pd.DataFrame(
-        parsed,
-        columns=["timestamp_ms", "open", "high", "low", "close", "volume"],
+        rows,
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
     )
-    df["timestamp"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
-    df = df.drop(columns=["timestamp_ms"]).sort_values("timestamp").drop_duplicates("timestamp")
-    df = df.reset_index(drop=True)
 
-    _validate_ohlc(df)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
-    result = {
-        "df": df,
-        "source": "okx",
-        "symbol": _display_symbol(symbol),
-        "timeframe": timeframe,
-        "timestamp": df["timestamp"].iloc[-1].isoformat(),
-    }
-    _cache[key] = (time.time(), result)
-    return result
+    numeric_columns = ["open", "high", "low", "close", "volume"]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    # Remove malformed rows.
+    df = df.dropna(subset=numeric_columns).copy()
+
+    # Validate OHLC relationships.
+    valid_ohlc = (
+        (df["high"] >= df[["open", "close"]].max(axis=1))
+        & (df["low"] <= df[["open", "close"]].min(axis=1))
+        & (df["high"] >= df["low"])
+        & (df["volume"] >= 0)
+    )
+    df = df.loc[valid_ohlc].copy()
+
+    # Sort, remove duplicate timestamps and reset index.
+    df = (
+        df.sort_values("timestamp")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .reset_index(drop=True)
+    )
+
+    if len(df) < 20:
+        raise RuntimeError(
+            f"Недостаточно корректных свечей OKX для {symbol} ({timeframe})."
+        )
+
+    return df
 
 
-def ticker(symbol: str):
-    inst_id = _okx_symbol(symbol)
-    key = ("okx-ticker", inst_id)
-    hit = _cached(key)
-    if hit is not None:
-        return hit
+def ticker(symbol: str) -> dict[str, Any]:
+    """Fetch current ticker from OKX through CCXT."""
 
-    payload = _request(OKX_TICKER_URL, {"instId": inst_id})
-    rows = payload.get("data") or []
-    if not rows:
-        raise ValueError("OKX не вернул текущую цену")
+    symbol = _validate_symbol(symbol)
 
-    item = rows[0]
     try:
-        price = float(item["last"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("OKX вернул некорректную текущую цену") from exc
+        data = _exchange.fetch_ticker(symbol)
+    except Exception as exc:
+        raise RuntimeError(f"OKX не вернул текущую цену для {symbol}.") from exc
 
-    timestamp = item.get("ts")
-    result = {
-        "price": price,
-        "timestamp": pd.to_datetime(int(timestamp), unit="ms", utc=True).isoformat()
-        if timestamp
-        else None,
-        "source": "okx",
-        "symbol": _display_symbol(symbol),
+    last = data.get("last")
+    if last is None:
+        raise RuntimeError(f"OKX не вернул цену для {symbol}.")
+
+    return {
+        "symbol": symbol,
+        "last": float(last),
+        "bid": float(data["bid"]) if data.get("bid") is not None else None,
+        "ask": float(data["ask"]) if data.get("ask") is not None else None,
+        "high": float(data["high"]) if data.get("high") is not None else None,
+        "low": float(data["low"]) if data.get("low") is not None else None,
+        "volume": float(data["baseVolume"]) if data.get("baseVolume") is not None else None,
+        "timestamp": data.get("timestamp"),
+        "datetime": data.get("datetime"),
+        "source": "OKX",
     }
-    _cache[key] = (time.time(), result)
-    return result
+
+
+def market_snapshot(symbol: str, timeframe: str, limit: int | None = None) -> dict[str, Any]:
+    """Return a compact validated market package for the AI analyzer."""
+
+    df = candles(symbol, timeframe, limit=limit)
+    tick = ticker(symbol)
+
+    latest = df.iloc[-1]
+
+    return {
+        "source": "OKX",
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "timestamp": tick.get("timestamp") or int(latest["timestamp"].timestamp() * 1000),
+        "ticker": tick,
+        "candles": [
+            {
+                "timestamp": int(row["timestamp"].timestamp() * 1000),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+            for _, row in df.iterrows()
+        ],
+    }
